@@ -1,81 +1,69 @@
 import os
-import base64
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+# ============================================================
+#  eBay Browse API Client (OAuth Token Only)
+# ============================================================
 
-EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
-EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
-EBAY_REFRESH_TOKEN = os.getenv("EBAY_REFRESH_TOKEN")
+EBAY_OAUTH_TOKEN = os.getenv("EBAY_OAUTH_TOKEN")
 
-TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
-BROWSE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+if not EBAY_OAUTH_TOKEN:
+    print("❌ ERROR: Missing EBAY_OAUTH_TOKEN in environment!")
+else:
+    print("✅ eBay OAuth token loaded.")
 
-
-def get_access_token():
-    """Exchange refresh token for a short-lived access_token."""
-    auth = f"{EBAY_CLIENT_ID}:{EBAY_CLIENT_SECRET}"
-    encoded_auth = base64.b64encode(auth.encode()).decode()
-
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Authorization": f"Basic {encoded_auth}",
-    }
-
-    data = {
-        "grant_type": "refresh_token",
-        "refresh_token": EBAY_REFRESH_TOKEN,
-        "scope": "https://api.ebay.com/oauth/api_scope"
-    }
-
-    response = requests.post(TOKEN_URL, headers=headers, data=data)
-    response.raise_for_status()
-
-    return response.json()["access_token"]
+BASE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 
 
-def search_ebay(query):
-    """Search eBay Buy API and return simplified pricing data."""
-    try:
-        token = get_access_token()
-    except Exception as e:
-        print("❌ Error retrieving eBay access token:", e)
-        return []
+def search_ebay(query: str, limit: int = 50):
+    """
+    Runs an eBay Browse API search for live listings.
+    Returns normalized results for aggregator.py.
+    """
+
+    if not EBAY_OAUTH_TOKEN:
+        return {"error": "Missing eBay OAuth token"}
 
     headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
+        "Authorization": f"Bearer {EBAY_OAUTH_TOKEN}",
+        "Content-Type": "application/json",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
     }
 
     params = {
         "q": query,
-        "limit": 20,
+        "limit": limit,
+        "filter": "price:[0..10000]",  # avoid garbage listings
+        "sort": "-price",              # sort highest → lowest (we re-rank later)
     }
 
     try:
-        response = requests.get(BROWSE_URL, headers=headers, params=params)
+        response = requests.get(BASE_URL, headers=headers, params=params)
         response.raise_for_status()
+
         data = response.json()
-    except Exception as e:
-        print("❌ Error calling eBay Browse API:", e)
-        return []
 
-    items = data.get("itemSummaries", [])
-    results = []
+        items = data.get("itemSummaries", [])
 
-    for item in items:
-        price = item.get("price", {}).get("value")
-        title = item.get("title")
-        item_id = item.get("itemId")
+        cleaned = []
 
-        if price:
-            results.append({
-                "title": title,
-                "price": float(price),
+        for item in items:
+            price_info = item.get("price", {})
+            price_value = float(price_info.get("value", 0))
+
+            cleaned.append({
+                "title": item.get("title"),
+                "price": price_value,
+                "url": item.get("itemWebUrl"),
+                "seller_score": item.get("seller", {}).get("feedbackScore", 0),
                 "source": "eBay",
-                "item_id": item_id,
-                "url": item.get("itemWebUrl")
             })
 
-    return results
+        return cleaned
+
+    except requests.exceptions.HTTPError as e:
+        print("❌ eBay API error:", e.response.text)
+        return {"error": e.response.text}
+    except Exception as e:
+        print("❌ Unexpected error:", str(e))
+        return {"error": str(e)}
