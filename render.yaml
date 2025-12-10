@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: card-deal-finder-api
+    env: python
+    region: oregon
+    branch: main
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn api:app"
+    envVars:
+      FLASK_ENV: production
