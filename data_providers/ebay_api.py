@@ -1,94 +1,55 @@
 import os
 import requests
-from dotenv import load_dotenv
 
-load_dotenv()
+EBAY_TOKEN = os.getenv("EBAY_BROWSE_TOKEN")
 
-EBAY_CLIENT_ID = os.getenv("EBAY_CLIENT_ID")
-EBAY_CLIENT_SECRET = os.getenv("EBAY_CLIENT_SECRET")
-
-TOKEN_URL = "https://api.ebay.com/identity/v1/oauth2/token"
-SEARCH_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+BASE_URL = "https://api.ebay.com/buy/browse/v1/item_summary/search"
 
 
-def get_access_token():
-    """
-    Retrieve a fresh OAuth token using Client Credentials.
-    """
-    if not EBAY_CLIENT_ID or not EBAY_CLIENT_SECRET:
-        print("❌ Missing eBay API credentials in .env")
-        return None
+def ebay_search(query: str, limit: int = 50):
+    if not EBAY_TOKEN:
+        print("❌ Missing EBAY_BROWSE_TOKEN")
+        return []
 
-    headers = {"Content-Type": "application/x-www-form-urlencoded"}
-
-    data = {
-        "grant_type": "client_credentials",
-        "scope": "https://api.ebay.com/oauth/api_scope"
+    headers = {
+        "Authorization": f"Bearer {EBAY_TOKEN}",
+        "X-EBAY-C-MARKETPLACE-ID": "EBAY_US",
+        "Content-Type": "application/json"
     }
 
-    try:
-        response = requests.post(
-            TOKEN_URL,
-            headers=headers,
-            data=data,
-            auth=(EBAY_CLIENT_ID, EBAY_CLIENT_SECRET)
-        )
-        response.raise_for_status()
-        token = response.json().get("access_token")
-        return token
+    params = {
+        "q": query,
+        "limit": limit
+    }
 
-    except Exception as e:
-        print("❌ Failed to get eBay token:", e)
-        return None
+    response = requests.get(BASE_URL, headers=headers, params=params)
 
+    print("EBAY STATUS:", response.status_code)
 
-def ebay_search(query, limit=20):
-    """
-    Run a Browse API search and normalize results.
-    """
-
-    access_token = get_access_token()
-    if not access_token:
+    if response.status_code != 200:
+        print("EBAY ERROR:", response.text)
         return []
 
-    headers = {"Authorization": f"Bearer {access_token}"}
-    params = {"q": query, "limit": limit}
-
-    try:
-        resp = requests.get(SEARCH_URL, headers=headers, params=params)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print("❌ eBay Search Error:", e)
-        return []
-
+    data = response.json()
     items = data.get("itemSummaries", [])
+
     results = []
-
     for item in items:
-        # Normalize price
-        raw_price = item.get("price")
-        price_value = None
+        try:
+            price = float(item["price"]["value"])
+        except:
+            price = None
 
-        if isinstance(raw_price, (int, float)):
-            price_value = float(raw_price)
-        elif isinstance(raw_price, dict):
-            val = raw_price.get("value")
-            if val is not None:
-                try:
-                    price_value = float(val)
-                except:
-                    price_value = None
-
-        # Extract seller score
-        seller = item.get("seller", {})
-        seller_score = seller.get("feedbackScore", 0)
+        try:
+            seller_score = float(item["seller"]["feedbackPercentage"])
+        except:
+            seller_score = None
 
         results.append({
             "title": item.get("title"),
-            "price": price_value,
-            "seller_score": seller_score,
             "url": item.get("itemWebUrl"),
+            "price": price,
+            "seller_score": seller_score,
             "source": "eBay"
         })
 
